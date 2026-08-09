@@ -1,0 +1,56 @@
+name: Build, Push & Update GitOps
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  IMAGE: zarinshazi/flask-basic-app
+  GITOPS_REPO: Zarinjahanshazi/flask-app-gitops
+  MANIFEST: apps/flask-basic-app/k8s/deployment.yaml
+
+jobs:
+  build-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set image tag (short commit SHA)
+        id: vars
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push image (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:${{ steps.vars.outputs.sha }}
+
+      - name: Check out the GitOps config repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Bump image tag in the config repo
+        working-directory: gitops
+        run: |
+          sed -i -E "s|(image: ${IMAGE}:).*|\1${{ steps.vars.outputs.sha }}|" "$MANIFEST"
+
+      - name: Commit & push to the config repo
+        working-directory: gitops
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git commit -m "ci: flask-basic-app -> ${{ steps.vars.outputs.sha }}" || echo "no changes"
+          git push
